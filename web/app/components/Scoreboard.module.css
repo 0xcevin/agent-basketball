@@ -1,0 +1,116 @@
+.scoreboard {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 16px;
+  padding: 20px;
+  margin-bottom: 20px;
+  backdrop-filter: blur(10px);
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.teamBlock {
+  text-align: center;
+  flex: 1;
+}
+
+.teamNameA {
+  color: #ff6b6b;
+  font-size: 24px;
+  margin-bottom: 8px;
+}
+
+.teamNameB {
+  color: #4ecdc4;
+  font-size: 24px;
+  margin-bottom: 8px;
+}
+
+.score {
+  font-size: 64px;
+  font-weight: bold;
+  color: #fff;
+  text-shadow: 0 0 20px rgba(255, 255, 255, 0.3);
+}
+
+.centerInfo {
+  text-align: center;
+  padding: 0 40px;
+}
+
+.time {
+  font-size: 32px;
+  color: #ffd93d;
+  font-weight: bold;
+  font-family: 'Courier New', monospace;
+}
+
+.quarter {
+  font-size: 18px;
+  color: #aaa;
+  margin-top: 4px;
+}
+
+.status {
+  margin-top: 8px;
+  font-size: 14px;
+}
+
+.live {
+  color: #4ade80;
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.finished {
+  color: #f87171;
+}
+
+.possession {
+  margin-top: 8px;
+  font-size: 14px;
+  color: #aaa;
+}
+
+.stats {
+  display: flex;
+  justify-content: space-between;
+  gap: 40px;
+}
+
+.teamStats {
+  flex: 1;
+}
+
+.playerStat {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 14px;
+}
+
+.playerStat:last-child {
+  border-bottom: none;
+}
+
+.playerName {
+  color: #fff;
+}
+
+.playerNumbers {
+  color: #aaa;
+  font-family: 'Courier New', monospace;
+}

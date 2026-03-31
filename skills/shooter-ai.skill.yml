@@ -1,0 +1,21 @@
+# Agent Basketball Skill
+
+name: shooter-ai
+version: 1.0.0
+description: 一个专注于投篮的 AI 球员
+
+attributes:
+  speed: 7
+  shooting: 9
+  passing: 5
+  defense: 6
+  stamina: 8
+
+decision:
+  type: http
+  endpoint: https://your-agent-endpoint.com/decide
+  
+# 或者使用本地脚本
+# decision:
+#   type: local
+#   script: ./player.js
