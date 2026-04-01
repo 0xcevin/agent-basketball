@@ -1,122 +1,85 @@
 /**
- * Skill Runner - 负责调用外部 Agent Skill
+ * Skill Runner - v2 (Team Control)
  * 
- * 支持两种模式：
- * 1. HTTP Skill: 调用远程 HTTP 接口
- * 2. Local Skill: 执行本地脚本
+ * 调用 Agent Skill，一个 Agent 控制 3 个球员
  */
 
 const { exec } = require('child_process');
 const { promisify } = require('util');
+const path = require('path');
+
 const execAsync = promisify(exec);
 
-class SkillRunner {
-  constructor(config) {
-    this.config = config;
-  }
+/**
+ * 运行 Agent Skill
+ * @param {Object} skill - Agent 配置
+ * @param {Object} gameState - 游戏状态
+ * @returns {Array} - [{playerIndex, action}, ...]
+ */
+async function runAgentSkill(skill, gameState) {
+  const { runtime, entrypoint } = skill;
   
-  async decide(gameState) {
-    if (this.config.endpoint) {
-      return this.callHttpSkill(gameState);
-    } else if (this.config.scriptPath) {
-      return this.callLocalSkill(gameState);
-    } else {
-      // 默认 AI 决策
-      return this.defaultDecision(gameState);
-    }
-  }
+  // 构建环境变量
+  const env = {
+    ...process.env,
+    GAME_STATE: JSON.stringify(gameState),
+  };
   
-  // HTTP Skill 调用
-  async callHttpSkill(gameState) {
-    try {
-      const response = await fetch(this.config.endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          player: this.config.name,
-          gameState
-        }),
-        timeout: 5000
-      });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      
-      const result = await response.json();
-      return result.action;
-    } catch (error) {
-      console.error('Skill HTTP call failed:', error);
-      return this.defaultDecision(gameState);
-    }
-  }
-  
-  // Local Skill 调用
-  async callLocalSkill(gameState) {
-    try {
-      const input = JSON.stringify(gameState);
-      const { stdout } = await execAsync(
-        `node ${this.config.scriptPath}`,
-        { 
-          input,
-          timeout: 5000,
-          env: { ...process.env, GAME_STATE: input }
-        }
-      );
-      
-      return JSON.parse(stdout);
-    } catch (error) {
-      console.error('Skill local call failed:', error);
-      return this.defaultDecision(gameState);
-    }
-  }
-  
-  // 默认 AI 决策
-  defaultDecision(gameState) {
-    const { me, iHaveBall, teammates } = gameState;
-    const distToBasket = Math.sqrt(
-      Math.pow(me.position.x - 7, 2) + 
-      Math.pow(me.position.y - 0, 2)
-    );
+  try {
+    let result;
     
-    if (iHaveBall) {
-      // 持球决策
-      if (distToBasket < 4 && me.attributes.shooting > 6) {
-        return { type: 'SHOOT', power: 0.7 };
-      }
-      
-      // 寻找空位队友
-      const openTeammate = teammates.find(t => {
-        const dist = Math.sqrt(
-          Math.pow(t.position.x - me.position.x, 2) +
-          Math.pow(t.position.y - me.position.y, 2)
-        );
-        return dist < 8 && dist > 2;
-      });
-      
-      if (openTeammate && me.attributes.passing > 5) {
-        return { type: 'PASS', target: openTeammate.id };
-      }
-      
-      // 突破
-      return {
-        type: 'MOVE',
-        target: {
-          x: 7 + (Math.random() - 0.5) * 4,
-          y: Math.max(2, me.position.y - 3)
-        }
-      };
+    if (runtime === 'node') {
+      const skillPath = path.join(__dirname, '../../skills', skill.name, entrypoint);
+      result = await execAsync(`node "${skillPath}"`, { env, timeout: 5000 });
+    } else if (runtime === 'python') {
+      const skillPath = path.join(__dirname, '../../skills', skill.name, entrypoint);
+      result = await execAsync(`python3 "${skillPath}"`, { env, timeout: 5000 });
+    } else if (skill.decisionType === 'http') {
+      // HTTP 调用
+      result = await callHttpEndpoint(skill.endpoint, gameState);
     } else {
-      // 无球跑位
-      return {
-        type: 'MOVE',
-        target: {
-          x: 7 + (Math.random() - 0.5) * 6,
-          y: 4 + Math.random() * 4
-        }
-      };
+      throw new Error(`不支持的 runtime: ${runtime}`);
     }
+    
+    // 解析输出
+    const output = result.stdout.trim();
+    const actions = JSON.parse(output);
+    
+    // 验证输出格式
+    if (!Array.isArray(actions)) {
+      throw new Error('Agent 输出必须是数组');
+    }
+    
+    return actions;
+    
+  } catch (error) {
+    console.error('Skill 执行失败:', error.message);
+    // 返回默认动作（让球员原地不动）
+    return [
+      { playerIndex: 0, action: { type: 'MOVE', target: gameState.myPlayers[0]?.position } },
+      { playerIndex: 1, action: { type: 'MOVE', target: gameState.myPlayers[1]?.position } },
+      { playerIndex: 2, action: { type: 'MOVE', target: gameState.myPlayers[2]?.position } },
+    ];
   }
 }
 
-module.exports = { SkillRunner };
+/**
+ * HTTP 调用 Agent
+ */
+async function callHttpEndpoint(endpoint, gameState) {
+  const fetch = (await import('node-fetch')).default;
+  
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(gameState),
+  });
+  
+  if (!response.ok) {
+    throw new Error(`HTTP 错误: ${response.status}`);
+  }
+  
+  return await response.json();
+}
+
+module.exports = { runAgentSkill };

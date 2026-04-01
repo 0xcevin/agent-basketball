@@ -1,7 +1,12 @@
-const { GameEngine } = require('../lib/game-engine');
-const { v4: uuidv4 } = require('uuid');
+/**
+ * Game API - v2 (Agent vs Agent)
+ * 
+ * 两个 Agent 对战，每个控制 3 个球员
+ */
 
-// 简单的内存存储（生产环境用 Redis/Vercel KV）
+const { GameEngine } = require('../lib/game-engine');
+
+// 内存中保存游戏实例
 const games = new Map();
 
 module.exports = async (req, res) => {
@@ -9,109 +14,120 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
+  
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
-
-  const { path } = req.query;
-
+  
+  const { action } = req.query;
+  
   try {
-    switch (path) {
+    switch (action) {
       case 'create':
-        return await createGame(req, res);
-      case 'state':
-        return await getGameState(req, res);
-      case 'action':
-        return await submitAction(req, res);
+        return await handleCreate(req, res);
       case 'start':
-        return await startGame(req, res);
-      case 'simulate':
-        return await simulateTurn(req, res);
+        return await handleStart(req, res);
+      case 'turn':
+        return await handleTurn(req, res);
+      case 'state':
+        return await handleState(req, res);
       default:
-        return res.status(404).json({ error: 'Unknown endpoint' });
+        return res.status(400).json({ error: '未知 action' });
     }
   } catch (error) {
-    console.error('API Error:', error);
+    console.error('API 错误:', error);
     return res.status(500).json({ error: error.message });
   }
 };
 
-// 创建新游戏
-async function createGame(req, res) {
+/**
+ * 创建游戏
+ * POST /api/game?action=create
+ * Body: { teamA: { name, runtime, entrypoint }, teamB: { ... } }
+ */
+async function handleCreate(req, res) {
   const { teamA, teamB } = req.body;
   
-  const gameId = uuidv4();
-  const game = new GameEngine(gameId, teamA, teamB);
+  if (!teamA || !teamB) {
+    return res.status(400).json({ 
+      error: '需要提供 teamA 和 teamB 配置' 
+    });
+  }
   
-  games.set(gameId, game);
+  // 生成游戏 ID
+  const gameId = `game_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   
-  return res.status(200).json({
+  // 创建游戏引擎
+  const engine = new GameEngine(teamA, teamB);
+  games.set(gameId, engine);
+  
+  return res.json({
+    success: true,
     gameId,
-    status: 'created',
-    message: 'Game created successfully'
+    message: '游戏创建成功',
+    teams: {
+      A: { name: teamA.name },
+      B: { name: teamB.name },
+    },
   });
 }
 
-// 获取游戏状态
-async function getGameState(req, res) {
+/**
+ * 开始游戏
+ * POST /api/game?action=start
+ * Body: { gameId }
+ */
+async function handleStart(req, res) {
+  const { gameId } = req.body;
+  
+  const engine = games.get(gameId);
+  if (!engine) {
+    return res.status(404).json({ error: '游戏不存在' });
+  }
+  
+  const state = engine.startGame();
+  
+  return res.json({
+    success: true,
+    state,
+  });
+}
+
+/**
+ * 执行回合
+ * POST /api/game?action=turn
+ * Body: { gameId }
+ */
+async function handleTurn(req, res) {
+  const { gameId } = req.body;
+  
+  const engine = games.get(gameId);
+  if (!engine) {
+    return res.status(404).json({ error: '游戏不存在' });
+  }
+  
+  const state = await engine.runTurn();
+  
+  return res.json({
+    success: true,
+    state,
+  });
+}
+
+/**
+ * 获取游戏状态
+ * GET /api/game?action=state&gameId=xxx
+ */
+async function handleState(req, res) {
   const { gameId } = req.query;
   
-  const game = games.get(gameId);
-  if (!game) {
-    return res.status(404).json({ error: 'Game not found' });
+  const engine = games.get(gameId);
+  if (!engine) {
+    return res.status(404).json({ error: '游戏不存在' });
   }
   
-  return res.status(200).json(game.getState());
-}
-
-// 开始游戏
-async function startGame(req, res) {
-  const { gameId } = req.body;
-  
-  const game = games.get(gameId);
-  if (!game) {
-    return res.status(404).json({ error: 'Game not found' });
-  }
-  
-  game.start();
-  
-  return res.status(200).json({
-    status: 'started',
-    state: game.getState()
-  });
-}
-
-// Agent 提交动作（手动模式）
-async function submitAction(req, res) {
-  const { gameId, playerId, action } = req.body;
-  
-  const game = games.get(gameId);
-  if (!game) {
-    return res.status(404).json({ error: 'Game not found' });
-  }
-  
-  game.submitPlayerAction(playerId, action);
-  
-  return res.status(200).json({
+  return res.json({
     success: true,
-    state: game.getState()
-  });
-}
-
-// 模拟一个回合（自动模式）
-async function simulateTurn(req, res) {
-  const { gameId } = req.body;
-  
-  const game = games.get(gameId);
-  if (!game) {
-    return res.status(404).json({ error: 'Game not found' });
-  }
-  
-  await game.simulateTurn();
-  
-  return res.status(200).json({
-    success: true,
-    state: game.getState()
+    state: engine.getGameState(),
   });
 }

@@ -1,302 +1,465 @@
 /**
- * 游戏引擎核心 - 处理比赛逻辑、状态推进、动作判定
+ * Basketball Game Engine - v2 (Agent vs Agent)
+ * 
+ * 两个 Agent 对战，每个 Agent 控制 3 个球员
  */
 
+const { runAgentSkill } = require('./skill-runner');
+
+// 游戏配置
+const GAME_CONFIG = {
+  COURT_WIDTH: 14,      // 半场宽度
+  COURT_HEIGHT: 15,     // 半场长度
+  BASKET_X: 7,          // 篮筐 X 坐标
+  BASKET_Y: 0,          // 篮筐 Y 坐标
+  TURN_DURATION: 3000,  // 每回合 3 秒
+  GAME_DURATION: 300,   // 5 分钟
+  MAX_SCORE: 21,        // 21 分获胜
+};
+
+// 初始球员位置
+function getInitialPositions(team) {
+  if (team === 'A') {
+    return [
+      { x: 4, y: 10 },   // 控球后卫
+      { x: 7, y: 12 },   // 前锋
+      { x: 10, y: 10 },  // 中锋
+    ];
+  } else {
+    return [
+      { x: 4, y: 5 },
+      { x: 7, y: 3 },
+      { x: 10, y: 5 },
+    ];
+  }
+}
+
 class GameEngine {
-  constructor(gameId, teamA, teamB) {
-    this.gameId = gameId;
-    this.status = 'waiting';
-    this.score = { A: 0, B: 0 };
-    this.possession = 'A'; // A 队先攻
-    this.timeRemaining = 300; // 5分钟
-    this.quarter = 1;
+  constructor(teamASkill, teamBSkill) {
+    this.teamASkill = teamASkill;  // Agent A 配置
+    this.teamBSkill = teamBSkill;  // Agent B 配置
+    
+    this.gameState = {
+      score: { A: 0, B: 0 },
+      timeRemaining: GAME_CONFIG.GAME_DURATION,
+      quarter: 1,
+      status: 'waiting',  // waiting, playing, finished
+      possession: 'A',    // 当前持球方
+      ballPosition: { x: 7, y: 10 },
+      ballHolder: null,   // 当前持球人ID
+    };
+    
+    // 球员状态 - 每个队3个球员
+    this.players = {
+      A: [
+        { id: 'A1', name: 'A-控卫', position: { x: 4, y: 10 }, stats: { points: 0, assists: 0, rebounds: 0 } },
+        { id: 'A2', name: 'A-前锋', position: { x: 7, y: 12 }, stats: { points: 0, assists: 0, rebounds: 0 } },
+        { id: 'A3', name: 'A-中锋', position: { x: 10, y: 10 }, stats: { points: 0, assists: 0, rebounds: 0 } },
+      ],
+      B: [
+        { id: 'B1', name: 'B-控卫', position: { x: 4, y: 5 }, stats: { points: 0, assists: 0, rebounds: 0 } },
+        { id: 'B2', name: 'B-前锋', position: { x: 7, y: 3 }, stats: { points: 0, assists: 0, rebounds: 0 } },
+        { id: 'B3', name: 'B-中锋', position: { x: 10, y: 5 }, stats: { points: 0, assists: 0, rebounds: 0 } },
+      ],
+    };
+    
     this.logs = [];
-    
-    // 初始化球员
-    this.players = [];
-    this.initPlayers(teamA, 'A');
-    this.initPlayers(teamB, 'B');
-    
-    // 球的位置
-    this.ballPosition = { x: 7, y: 2 }; // 三分线外
-    this.ballHolder = null;
-    
-    // 待处理的动作
-    this.pendingActions = new Map();
+    this.turnNumber = 0;
   }
   
-  initPlayers(teamConfig, teamId) {
-    const startPositions = teamId === 'A' 
-      ? [{x: 3, y: 3}, {x: 7, y: 5}, {x: 11, y: 3}]  // A队进攻位置
-      : [{x: 3, y: 12}, {x: 7, y: 10}, {x: 11, y: 12}]; // B队防守位置
-      
-    teamConfig.players.forEach((skillConfig, index) => {
-      this.players.push({
-        id: `${teamId}-${index}`,
-        name: skillConfig.name,
-        team: teamId,
-        position: { ...startPositions[index] },
-        attributes: skillConfig.attributes,
-        stats: { points: 0, assists: 0, rebounds: 0, steals: 0 }
-      });
-    });
+  log(message) {
+    const timestamp = new Date().toISOString();
+    const logEntry = `[${timestamp}] ${message}`;
+    this.logs.push(logEntry);
+    console.log(logEntry);
   }
   
-  start() {
-    this.status = 'playing';
-    this.log('比赛开始！');
-    this.log(`${this.getTeamPlayers('A')[0].name} 发球`);
+  startGame() {
+    this.gameState.status = 'playing';
+    this.gameState.possession = Math.random() > 0.5 ? 'A' : 'B';
+    this.log(`比赛开始！${this.gameState.possession}队获得球权`);
+    
+    // 设置初始持球人
+    const team = this.gameState.possession;
+    this.gameState.ballHolder = this.players[team][0].id;
+    this.updateBallPosition();
+    
+    return this.getGameState();
   }
   
-  getState() {
+  updateBallPosition() {
+    if (this.gameState.ballHolder) {
+      const player = this.findPlayer(this.gameState.ballHolder);
+      if (player) {
+        this.gameState.ballPosition = { ...player.position };
+      }
+    }
+  }
+  
+  findPlayer(playerId) {
+    for (const team of ['A', 'B']) {
+      const player = this.players[team].find(p => p.id === playerId);
+      if (player) return player;
+    }
+    return null;
+  }
+  
+  findPlayerByTeamAndIndex(team, index) {
+    return this.players[team][index];
+  }
+  
+  // 获取 Agent 视角的游戏状态
+  getAgentState(team) {
+    const myPlayers = this.players[team];
+    const opponentTeam = team === 'A' ? 'B' : 'A';
+    const opponentPlayers = this.players[opponentTeam];
+    
+    // 构建每个球员的视角
+    const playerStates = myPlayers.map((player, index) => ({
+      index: index,  // 0, 1, 2
+      id: player.id,
+      name: player.name,
+      position: player.position,
+      stats: player.stats,
+      iHaveBall: this.gameState.ballHolder === player.id,
+    }));
+    
     return {
-      gameId: this.gameId,
-      status: this.status,
-      quarter: this.quarter,
-      timeRemaining: this.timeRemaining,
-      score: this.score,
-      possession: this.possession,
-      players: this.players,
-      ballPosition: this.ballPosition,
-      logs: this.logs.slice(-20) // 最近20条日志
+      team: team,
+      score: this.gameState.score,
+      timeRemaining: this.gameState.timeRemaining,
+      possession: this.gameState.possession === team,
+      ballPosition: this.gameState.ballPosition,
+      myPlayers: playerStates,
+      opponentPlayers: opponentPlayers.map(p => ({
+        id: p.id,
+        name: p.name,
+        position: p.position,
+      })),
+      turnNumber: this.turnNumber,
     };
   }
   
-  // 模拟一个回合
-  async simulateTurn() {
-    if (this.status !== 'playing') return;
+  async runTurn() {
+    if (this.gameState.status !== 'playing') return;
     
-    // 获取当前控球方的球员
-    const offensivePlayers = this.getTeamPlayers(this.possession);
-    const defensiveTeam = this.possession === 'A' ? 'B' : 'A';
-    const defensivePlayers = this.getTeamPlayers(defensiveTeam);
+    this.turnNumber++;
+    const activeTeam = this.gameState.possession;
+    const skill = activeTeam === 'A' ? this.teamASkill : this.teamBSkill;
     
-    // 为每个进攻球员调用 Skill 获取决策
-    for (const player of offensivePlayers) {
-      const gameState = this.buildGameStateForPlayer(player);
-      const action = await this.callSkill(player, gameState);
-      this.pendingActions.set(player.id, action);
+    this.log(`=== 回合 ${this.turnNumber} | ${activeTeam}队决策 ===`);
+    
+    // 获取 Agent 状态
+    const agentState = this.getAgentState(activeTeam);
+    
+    try {
+      // 调用 Agent Skill - 返回3个球员的动作
+      const actions = await runAgentSkill(skill, agentState);
+      
+      // 执行动作
+      await this.executeActions(activeTeam, actions);
+      
+    } catch (error) {
+      this.log(`Agent 执行错误: ${error.message}`);
     }
     
-    // 执行动作（简化版：只执行持球者的动作）
-    const ballHolder = this.getBallHolder() || offensivePlayers[0];
-    const action = this.pendingActions.get(ballHolder.id);
+    // 更新时间
+    this.gameState.timeRemaining -= 5;  // 每回合5秒
     
-    if (action) {
-      this.executeAction(ballHolder, action, offensivePlayers, defensivePlayers);
-    }
-    
-    // 更新时间和检查比赛结束
-    this.timeRemaining -= 5; // 每个回合5秒
-    if (this.timeRemaining <= 0 || this.score.A >= 11 || this.score.B >= 11) {
+    // 检查比赛结束
+    if (this.gameState.timeRemaining <= 0 || 
+        this.gameState.score.A >= GAME_CONFIG.MAX_SCORE ||
+        this.gameState.score.B >= GAME_CONFIG.MAX_SCORE) {
       this.endGame();
     }
     
-    this.pendingActions.clear();
+    return this.getGameState();
   }
   
-  // 构建给 Skill 的游戏状态（信息隐藏，只能看到应该看到的）
-  buildGameStateForPlayer(player) {
-    return {
-      me: player,
-      teammates: this.players.filter(p => p.team === player.team && p.id !== player.id),
-      opponents: this.players.filter(p => p.team !== player.team),
-      ballPosition: this.ballPosition,
-      possession: this.possession,
-      score: this.score,
-      timeRemaining: this.timeRemaining,
-      iHaveBall: this.getBallHolder()?.id === player.id
-    };
-  }
-  
-  // 调用 Agent Skill
-  async callSkill(player, gameState) {
-    // TODO: 这里调用外部的 Skill
-    // 现在使用内置的 AI 决策
-    return this.aiDecide(player, gameState);
-  }
-  
-  // 内置 AI 决策（示例逻辑）
-  aiDecide(player, state) {
-    const distToBasket = this.getDistance(player.position, { x: 7, y: 0 });
-    
-    // 如果持球且离篮筐近，投篮
-    if (state.iHaveBall && distToBasket < 4) {
-      return { type: 'SHOOT', power: 0.7 };
+  async executeActions(team, actions) {
+    // actions 应该是 [{playerIndex, action}, ...]
+    if (!Array.isArray(actions)) {
+      this.log('错误：actions 必须是数组');
+      return;
     }
     
-    // 如果持球但离得远，往篮下移动
-    if (state.iHaveBall) {
-      return { 
-        type: 'MOVE', 
-        target: { x: 7, y: Math.max(0, player.position.y - 3) }
-      };
-    }
+    // 优先执行持球人的动作
+    const ballHolderIndex = this.players[team].findIndex(
+      p => p.id === this.gameState.ballHolder
+    );
     
-    // 无球跑位
-    return { 
-      type: 'MOVE',
-      target: { 
-        x: player.position.x + (Math.random() - 0.5) * 2,
-        y: player.position.y + (Math.random() - 0.5) * 2
-      }
-    };
+    // 按优先级排序：持球人先执行
+    const sortedActions = [...actions].sort((a, b) => {
+      if (a.playerIndex === ballHolderIndex) return -1;
+      if (b.playerIndex === ballHolderIndex) return 1;
+      return 0;
+    });
+    
+    for (const { playerIndex, action } of sortedActions) {
+      if (playerIndex < 0 || playerIndex > 2) continue;
+      
+      const player = this.players[team][playerIndex];
+      await this.executePlayerAction(player, action);
+    }
   }
   
-  // 执行动作
-  executeAction(player, action, teammates, opponents) {
+  async executePlayerAction(player, action) {
+    if (!action || !action.type) return;
+    
     switch (action.type) {
       case 'MOVE':
-        this.executeMove(player, action.target);
+        await this.handleMove(player, action.target);
         break;
       case 'PASS':
-        this.executePass(player, action.target, teammates);
+        await this.handlePass(player, action.target);
         break;
       case 'SHOOT':
-        this.executeShoot(player, action.power, opponents);
+        await this.handleShoot(player, action.power);
         break;
       case 'DEFEND':
-        this.executeDefend(player, action.target);
+        await this.handleDefend(player, action.target);
         break;
       case 'STEAL':
-        this.executeSteal(player, opponents);
+        await this.handleSteal(player);
         break;
+      default:
+        this.log(`未知动作类型: ${action.type}`);
     }
   }
   
-  executeMove(player, target) {
-    const speed = player.attributes.speed * 0.5;
-    const dx = target.x - player.position.x;
-    const dy = target.y - player.position.y;
+  async handleMove(player, target) {
+    if (!target) return;
+    
+    // 限制移动范围
+    target.x = Math.max(0, Math.min(GAME_CONFIG.COURT_WIDTH, target.x));
+    target.y = Math.max(0, Math.min(GAME_CONFIG.COURT_HEIGHT, target.y));
+    
+    player.position = target;
+    
+    // 如果持球，更新球位置
+    if (this.gameState.ballHolder === player.id) {
+      this.updateBallPosition();
+    }
+    
+    this.log(`${player.name} 移动到 (${target.x.toFixed(1)}, ${target.y.toFixed(1)})`);
+  }
+  
+  async handlePass(player, targetId) {
+    if (this.gameState.ballHolder !== player.id) {
+      this.log(`${player.name} 尝试传球但没有球`);
+      return;
+    }
+    
+    const targetPlayer = this.findPlayer(targetId);
+    if (!targetPlayer) {
+      this.log(`${player.name} 传球目标不存在`);
+      return;
+    }
+    
+    // 检查是否是队友
+    const playerTeam = player.id.startsWith('A') ? 'A' : 'B';
+    const targetTeam = targetId.startsWith('A') ? 'A' : 'B';
+    
+    if (playerTeam !== targetTeam) {
+      this.log(`${player.name} 不能传给对手`);
+      return;
+    }
+    
+    // 计算传球距离
+    const dist = Math.sqrt(
+      Math.pow(player.position.x - targetPlayer.position.x, 2) +
+      Math.pow(player.position.y - targetPlayer.position.y, 2)
+    );
+    
+    // 传球成功率（距离越远成功率越低）
+    const successRate = Math.max(0.3, 1 - dist / 10);
+    
+    if (Math.random() < successRate) {
+      this.gameState.ballHolder = targetId;
+      this.updateBallPosition();
+      player.stats.assists++;
+      this.log(`${player.name} 传球给 ${targetPlayer.name} ✅`);
+    } else {
+      // 传球失误，转换球权
+      this.log(`${player.name} 传球给 ${targetPlayer.name} 失误 ❌`);
+      this.turnover();
+    }
+  }
+  
+  async handleShoot(player, power = 0.7) {
+    if (this.gameState.ballHolder !== player.id) {
+      this.log(`${player.name} 尝试投篮但没有球`);
+      return;
+    }
+    
+    const distToBasket = Math.sqrt(
+      Math.pow(player.position.x - GAME_CONFIG.BASKET_X, 2) +
+      Math.pow(player.position.y - GAME_CONFIG.BASKET_Y, 2)
+    );
+    
+    // 基础命中率
+    let baseRate = 0.6;
+    if (distToBasket > 5) baseRate = 0.35;  // 三分
+    else if (distToBasket > 3) baseRate = 0.5;  // 中距离
+    
+    // 受防守影响
+    const opponentTeam = player.id.startsWith('A') ? 'B' : 'A';
+    let defensePressure = 0;
+    for (const opp of this.players[opponentTeam]) {
+      const dist = Math.sqrt(
+        Math.pow(opp.position.x - player.position.x, 2) +
+        Math.pow(opp.position.y - player.position.y, 2)
+      );
+      if (dist < 2) defensePressure++;
+    }
+    
+    const finalRate = baseRate * (1 - defensePressure * 0.15) * power;
+    
+    if (Math.random() < finalRate) {
+      // 进球
+      const points = distToBasket > 5 ? 3 : 2;
+      const team = player.id.startsWith('A') ? 'A' : 'B';
+      this.gameState.score[team] += points;
+      player.stats.points += points;
+      
+      this.log(`${player.name} 投篮命中！${points}分！🎉 (${distToBasket.toFixed(1)}m)`);
+      
+      // 进球后换发球
+      this.gameState.possession = team === 'A' ? 'B' : 'A';
+      this.resetPositions();
+    } else {
+      this.log(`${player.name} 投篮打铁 ❌ (${distToBasket.toFixed(1)}m)`);
+      // 篮板争夺
+      this.contestRebound();
+    }
+  }
+  
+  async handleDefend(player, targetId) {
+    const target = this.findPlayer(targetId);
+    if (!target) return;
+    
+    // 向目标移动并贴身防守
+    const dx = target.position.x - player.position.x;
+    const dy = target.position.y - player.position.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
     
     if (dist > 0) {
-      const ratio = Math.min(speed / dist, 1);
-      player.position.x += dx * ratio;
-      player.position.y += dy * ratio;
+      // 移动到距离目标 1 米的位置
+      const targetDist = 1;
+      const moveX = player.position.x + (dx / dist) * (dist - targetDist);
+      const moveY = player.position.y + (dy / dist) * (dist - targetDist);
+      
+      player.position = { x: moveX, y: moveY };
     }
     
-    // 如果持球，球跟着移动
-    if (this.getBallHolder()?.id === player.id) {
-      this.ballPosition = { ...player.position };
-    }
-    
-    this.log(`${player.name} 移动到 (${player.position.x.toFixed(1)}, ${player.position.y.toFixed(1)})`);
+    this.log(`${player.name} 防守 ${target.name}`);
   }
   
-  executePass(player, targetId, teammates) {
-    const target = teammates.find(p => p.id === targetId);
-    if (!target) return;
+  async handleSteal(player) {
+    // 检查是否靠近持球人
+    const opponentTeam = player.id.startsWith('A') ? 'B' : 'A';
+    const ballHolder = this.findPlayer(this.gameState.ballHolder);
     
-    // 传球成功率计算
-    const passSuccess = Math.random() < (player.attributes.passing / 10);
+    if (!ballHolder) return;
     
-    if (passSuccess) {
-      this.ballHolder = target;
-      this.ballPosition = { ...target.position };
-      player.stats.assists++;
-      this.log(`${player.name} 传球给 ${target.name}`);
-    } else {
-      this.log(`${player.name} 传球失误！`);
-      this.changePossession();
-    }
-  }
-  
-  executeShoot(player, power, opponents) {
-    const basketPos = { x: 7, y: 0 };
-    const dist = this.getDistance(player.position, basketPos);
+    const dist = Math.sqrt(
+      Math.pow(player.position.x - ballHolder.position.x, 2) +
+      Math.pow(player.position.y - ballHolder.position.y, 2)
+    );
     
-    // 基础命中率
-    let shotChance = player.attributes.shooting / 10;
-    
-    // 距离修正 (越远越难)
-    shotChance *= Math.max(0.3, 1 - dist / 10);
-    
-    // 防守压力修正
-    const nearbyDefenders = opponents.filter(o => 
-      this.getDistance(o.position, player.position) < 2
-    ).length;
-    shotChance *= Math.pow(0.8, nearbyDefenders);
-    
-    const made = Math.random() < shotChance;
-    
-    if (made) {
-      const points = dist > 5 ? 3 : 2; // 三分线判断
-      this.score[player.team] += points;
-      player.stats.points += points;
-      this.log(`${player.name} 投篮命中！${points}分！`);
-      this.changePossession();
-    } else {
-      this.log(`${player.name} 投篮不中`);
-      // 简化：直接换攻防
-      this.changePossession();
-    }
-  }
-  
-  executeDefend(player, targetId) {
-    // 贴防逻辑
-    this.log(`${player.name} 防守 ${targetId}`);
-  }
-  
-  executeSteal(player, opponents) {
-    const ballHolder = this.getBallHolder();
-    if (!ballHolder || ballHolder.team === player.team) return;
-    
-    const stealChance = (player.attributes.defense / 10) * 0.3;
-    
-    if (Math.random() < stealChance) {
-      this.log(`${player.name} 抢断成功！`);
-      player.stats.steals++;
-      this.ballHolder = player;
-      this.ballPosition = { ...player.position };
-      this.possession = player.team;
+    if (dist < 2 && Math.random() < 0.3) {
+      this.log(`${player.name} 抢断成功！⚡`);
+      this.gameState.ballHolder = player.id;
+      this.gameState.possession = player.id.startsWith('A') ? 'A' : 'B';
+      this.updateBallPosition();
     } else {
       this.log(`${player.name} 抢断失败`);
     }
   }
   
-  changePossession() {
-    this.possession = this.possession === 'A' ? 'B' : 'A';
-    this.ballHolder = null;
+  turnover() {
+    this.gameState.possession = this.gameState.possession === 'A' ? 'B' : 'A';
+    this.resetPositions();
+    this.log(`球权转换！${this.gameState.possession}队获得球权`);
+  }
+  
+  contestRebound() {
+    // 简单的篮板争夺
+    const teamA = this.players.A;
+    const teamB = this.players.B;
     
-    // 重置球位置到新进攻方
-    const newOffense = this.getTeamPlayers(this.possession);
-    this.ballPosition = { ...newOffense[0].position };
-    this.log(`球权转换，${this.possession}队进攻`);
+    // 计算每队离篮筐近的球员数
+    let aClose = 0, bClose = 0;
+    
+    for (const p of teamA) {
+      const dist = Math.sqrt(
+        Math.pow(p.position.x - GAME_CONFIG.BASKET_X, 2) +
+        Math.pow(p.position.y - GAME_CONFIG.BASKET_Y, 2)
+      );
+      if (dist < 4) aClose++;
+    }
+    
+    for (const p of teamB) {
+      const dist = Math.sqrt(
+        Math.pow(p.position.x - GAME_CONFIG.BASKET_X, 2) +
+        Math.pow(p.position.y - GAME_CONFIG.BASKET_Y, 2)
+      );
+      if (dist < 4) bClose++;
+    }
+    
+    // 争夺篮板
+    const aWin = Math.random() < (aClose / (aClose + bClose + 0.1));
+    const winner = aWin ? 'A' : 'B';
+    
+    this.gameState.possession = winner;
+    this.gameState.ballHolder = this.players[winner][0].id;
+    this.updateBallPosition();
+    
+    const rebounder = this.players[winner][0];
+    rebounder.stats.rebounds++;
+    
+    this.log(`${rebounder.name} 抢到篮板！`);
   }
   
-  getTeamPlayers(team) {
-    return this.players.filter(p => p.team === team);
-  }
-  
-  getBallHolder() {
-    return this.players.find(p => 
-      Math.abs(p.position.x - this.ballPosition.x) < 0.5 &&
-      Math.abs(p.position.y - this.ballPosition.y) < 0.5
-    );
-  }
-  
-  getDistance(pos1, pos2) {
-    const dx = pos1.x - pos2.x;
-    const dy = pos1.y - pos2.y;
-    return Math.sqrt(dx * dx + dy * dy);
-  }
-  
-  log(message) {
-    const timestamp = new Date().toISOString().substr(11, 8);
-    this.logs.push(`[${timestamp}] ${message}`);
-    console.log(`[Game ${this.gameId}] ${message}`);
+  resetPositions() {
+    // 重置球员位置
+    this.players.A[0].position = { x: 4, y: 10 };
+    this.players.A[1].position = { x: 7, y: 12 };
+    this.players.A[2].position = { x: 10, y: 10 };
+    
+    this.players.B[0].position = { x: 4, y: 5 };
+    this.players.B[1].position = { x: 7, y: 3 };
+    this.players.B[2].position = { x: 10, y: 5 };
+    
+    // 新持球人
+    const team = this.gameState.possession;
+    this.gameState.ballHolder = this.players[team][0].id;
+    this.updateBallPosition();
   }
   
   endGame() {
-    this.status = 'finished';
-    const winner = this.score.A > this.score.B ? 'A' : 'B';
-    this.log(`比赛结束！${winner}队获胜 ${this.score.A}:${this.score.B}`);
+    this.gameState.status = 'finished';
+    const winner = this.gameState.score.A > this.gameState.score.B ? 'A' : 
+                   this.gameState.score.B > this.gameState.score.A ? 'B' : 'tie';
+    
+    this.log('=== 比赛结束 ===');
+    this.log(`最终比分: A ${this.gameState.score.A} - ${this.gameState.score.B} B`);
+    
+    if (winner === 'tie') {
+      this.log('平局！');
+    } else {
+      this.log(`${winner}队获胜！🏆`);
+    }
   }
   
-  submitPlayerAction(playerId, action) {
-    this.pendingActions.set(playerId, action);
+  getGameState() {
+    return {
+      ...this.gameState,
+      players: [...this.players.A, ...this.players.B],
+      logs: this.logs.slice(-20),  // 最近20条日志
+      turnNumber: this.turnNumber,
+    };
   }
 }
 
-module.exports = { GameEngine };
+module.exports = { GameEngine, GAME_CONFIG };

@@ -1,130 +1,170 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import Court from './components/Court';
-import Scoreboard from './components/Scoreboard';
-import GameLog from './components/GameLog';
 import styles from './page.module.css';
+import Scoreboard from './components/Scoreboard';
+import Court from './components/Court';
+import GameLog from './components/GameLog';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || '/api';
+// API 基础 URL
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000/api';
+
+interface GameState {
+  score: { A: number; B: number };
+  timeRemaining: number;
+  quarter: number;
+  status: 'waiting' | 'playing' | 'finished';
+  possession: 'A' | 'B';
+  ballPosition: { x: number; y: number };
+  ballHolder: string | null;
+  players: Array<{
+    id: string;
+    name: string;
+    position: { x: number; y: number };
+    stats: { points: number; assists: number; rebounds: number };
+  }>;
+  logs: string[];
+  turnNumber: number;
+}
 
 export default function Home() {
-  const [gameId, setGameId] = useState<string | null>(null);
-  const [gameState, setGameState] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
+  const [gameState, setGameState] = useState<GameState | null>(null);
+  const [gameId, setGameId] = useState<string>('');
+  const [isRunning, setIsRunning] = useState(false);
   const [autoPlay, setAutoPlay] = useState(false);
+  const [logs, setLogs] = useState<string[]>([]);
 
-  // 创建新游戏
-  const createGame = async () => {
-    setLoading(true);
+  // 创建游戏
+  const createGame = useCallback(async () => {
     try {
-      const teamA = {
-        name: '红队',
-        players: [
-          { name: '射手A1', attributes: { speed: 7, shooting: 9, passing: 5, defense: 6, stamina: 8 } },
-          { name: '传球A2', attributes: { speed: 6, shooting: 6, passing: 9, defense: 7, stamina: 7 } },
-          { name: '全能A3', attributes: { speed: 8, shooting: 7, passing: 7, defense: 8, stamina: 8 } },
-        ]
-      };
-      
-      const teamB = {
-        name: '蓝队',
-        players: [
-          { name: '射手B1', attributes: { speed: 7, shooting: 9, passing: 5, defense: 6, stamina: 8 } },
-          { name: '传球B2', attributes: { speed: 6, shooting: 6, passing: 9, defense: 7, stamina: 7 } },
-          { name: '全能B3', attributes: { speed: 8, shooting: 7, passing: 7, defense: 8, stamina: 8 } },
-        ]
-      };
-
-      const res = await fetch(`${API_BASE}/game/create`, {
+      const response = await fetch(`${API_URL}/game?action=create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ teamA, teamB })
+        body: JSON.stringify({
+          teamA: {
+            name: 'team-ai',
+            runtime: 'node',
+            entrypoint: 'index.js',
+          },
+          teamB: {
+            name: 'team-ai',
+            runtime: 'node',
+            entrypoint: 'index.js',
+          },
+        }),
       });
       
-      const data = await res.json();
-      setGameId(data.gameId);
-      
-      // 自动开始
-      await fetch(`${API_BASE}/game/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gameId: data.gameId })
-      });
-      
-      fetchGameState(data.gameId);
+      const data = await response.json();
+      if (data.success) {
+        setGameId(data.gameId);
+        setLogs([`游戏创建成功: ${data.gameId}`]);
+        return data.gameId;
+      }
     } catch (error) {
-      console.error('Failed to create game:', error);
-    }
-    setLoading(false);
-  };
-
-  // 获取游戏状态
-  const fetchGameState = useCallback(async (id: string) => {
-    try {
-      const res = await fetch(`${API_BASE}/game/state?gameId=${id}`);
-      const data = await res.json();
-      setGameState(data);
-    } catch (error) {
-      console.error('Failed to fetch game state:', error);
+      console.error('创建游戏失败:', error);
+      setLogs(prev => [...prev, '创建游戏失败']);
     }
   }, []);
 
-  // 模拟一回合
-  const simulateTurn = async () => {
-    if (!gameId) return;
+  // 开始游戏
+  const startGame = useCallback(async (gid: string) => {
     try {
-      await fetch(`${API_BASE}/game/simulate`, {
+      const response = await fetch(`${API_URL}/game?action=start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gameId })
+        body: JSON.stringify({ gameId: gid }),
       });
-      fetchGameState(gameId);
+      
+      const data = await response.json();
+      if (data.success) {
+        setGameState(data.state);
+        setLogs(data.state.logs || []);
+      }
     } catch (error) {
-      console.error('Failed to simulate turn:', error);
+      console.error('开始游戏失败:', error);
     }
-  };
+  }, []);
+
+  // 执行回合
+  const runTurn = useCallback(async () => {
+    if (!gameId || !gameState || gameState.status === 'finished') return;
+    
+    try {
+      const response = await fetch(`${API_URL}/game?action=turn`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gameId }),
+      });
+      
+      const data = await response.json();
+      if (data.success) {
+        setGameState(data.state);
+        setLogs(data.state.logs || []);
+        
+        if (data.state.status === 'finished') {
+          setIsRunning(false);
+          setAutoPlay(false);
+        }
+      }
+    } catch (error) {
+      console.error('执行回合失败:', error);
+    }
+  }, [gameId, gameState]);
 
   // 自动播放
   useEffect(() => {
-    if (!autoPlay || !gameId || gameState?.status === 'finished') return;
+    if (!autoPlay || !isRunning) return;
     
     const interval = setInterval(() => {
-      simulateTurn();
-    }, 1000);
+      runTurn();
+    }, 2000);
     
     return () => clearInterval(interval);
-  }, [autoPlay, gameId, gameState?.status]);
+  }, [autoPlay, isRunning, runTurn]);
 
-  // 刷新状态
-  useEffect(() => {
-    if (gameId && !autoPlay) {
-      const interval = setInterval(() => {
-        fetchGameState(gameId);
-      }, 2000);
-      return () => clearInterval(interval);
+  // 初始化并开始游戏
+  const handleStart = async () => {
+    setIsRunning(true);
+    const gid = await createGame();
+    if (gid) {
+      await startGame(gid);
     }
-  }, [gameId, autoPlay, fetchGameState]);
+  };
 
   return (
     <main className={styles.main}>
       <h1 className={styles.title}>🏀 Agent Basketball 3v3</h1>
       
       <div className={styles.controls}>
-        {!gameId ? (
-          <button onClick={createGame} disabled={loading} className={styles.btnPrimary}>
-            {loading ? '创建中...' : '开始新比赛'}
+        {!isRunning ? (
+          <button className={styles.btnPrimary} onClick={handleStart}>
+            开始比赛
           </button>
         ) : (
           <>
-            <button onClick={simulateTurn} disabled={gameState?.status === 'finished'} className={styles.btnPrimary}>
+            <button 
+              className={styles.btnPrimary} 
+              onClick={runTurn}
+              disabled={gameState?.status === 'finished'}
+            >
               下一回合
             </button>
-            <button onClick={() => setAutoPlay(!autoPlay)} className={styles.btnSecondary}>
-              {autoPlay ? '⏸ 暂停' : '▶ 自动播放'}
+            <button 
+              className={styles.btnSecondary}
+              onClick={() => setAutoPlay(!autoPlay)}
+            >
+              {autoPlay ? '⏸ 暂停' : '▶ 自动'}
             </button>
-            <button onClick={createGame} className={styles.btnSecondary}>
-              重新开始
+            <button 
+              className={styles.btnSecondary}
+              onClick={() => {
+                setIsRunning(false);
+                setAutoPlay(false);
+                setGameState(null);
+                setGameId('');
+              }}
+            >
+              重置
             </button>
           </>
         )}
@@ -132,21 +172,37 @@ export default function Home() {
 
       {gameState && (
         <div className={styles.gameContainer}>
-          <Scoreboard gameState={gameState} />
+          <Scoreboard 
+            score={gameState.score}
+            timeRemaining={gameState.timeRemaining}
+            quarter={gameState.quarter}
+            status={gameState.status}
+            possession={gameState.possession}
+            players={gameState.players}
+            turnNumber={gameState.turnNumber}
+          />
           
           <div className={styles.courtWrapper}>
-            <Court gameState={gameState} />
+            <Court 
+              players={gameState.players}
+              ballPosition={gameState.ballPosition}
+              ballHolder={gameState.ballHolder}
+            />
           </div>
           
-          <GameLog logs={gameState.logs} />
+          <GameLog logs={logs} />
         </div>
       )}
       
-      <div className={styles.info}>
-        <h3>关于游戏</h3>
-        <p>这是一个专为 AI Agent 设计的 3v3 篮球游戏。</p>
-        <p>每个球员都是一个独立的 Agent Skill，根据场上情况做出决策。</p>
-      </div>
+      {!gameState && (
+        <div className={styles.info}>
+          <h3>🎮 游戏说明</h3>
+          <p>• 两个 AI Agent 对战，每个控制 3 个球员</p>
+          <p>• 先进 21 分或时间结束时分数高者获胜</p>
+          <p>• 每回合 Agent 为自己的 3 个球员决策</p>
+          <p>• 动作类型：移动、传球、投篮、防守、抢断</p>
+        </div>
+      )}
     </main>
   );
 }
