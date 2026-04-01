@@ -1,0 +1,20 @@
+{
+  "name": "defender-ai",
+  "version": "1.0.0",
+  "description": "一个专注于防守的篮球 AI Agent",
+  "author": "Agent Basketball Team",
+  "runtime": "node",
+  "entrypoint": "index.js",
+  "attributes": {
+    "speed": 8,
+    "shooting": 4,
+    "passing": 5,
+    "defense": 9,
+    "stamina": 9
+  },
+  "config": {
+    "decisionType": "local",
+    "stealAggressiveness": 0.6,
+    "defendDistance": 1.5
+  }
+}

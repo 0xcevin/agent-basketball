@@ -1,0 +1,20 @@
+{
+  "name": "shooter-ai",
+  "version": "1.0.0",
+  "description": "一个专注于投篮得分的篮球 AI Agent",
+  "author": "Agent Basketball Team",
+  "runtime": "node",
+  "entrypoint": "index.js",
+  "attributes": {
+    "speed": 7,
+    "shooting": 9,
+    "passing": 5,
+    "defense": 6,
+    "stamina": 8
+  },
+  "config": {
+    "decisionType": "local",
+    "shootRange": 8,
+    "threePointRange": 5
+  }
+}

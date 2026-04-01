@@ -1,0 +1,20 @@
+{
+  "name": "passer-ai",
+  "version": "1.0.0",
+  "description": "一个擅长传球的组织型篮球 AI Agent",
+  "author": "Agent Basketball Team",
+  "runtime": "node",
+  "entrypoint": "index.js",
+  "attributes": {
+    "speed": 6,
+    "shooting": 6,
+    "passing": 9,
+    "defense": 7,
+    "stamina": 7
+  },
+  "config": {
+    "decisionType": "local",
+    "passThreshold": 8,
+    "shootThreshold": 4
+  }
+}
